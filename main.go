@@ -5,6 +5,9 @@ import (
 	"os"
 	"strconv"
 	"sync"
+
+	"github.com/ukarim/smscsim/smsc"
+	"github.com/ukarim/smscsim/smscserver"
 )
 
 var wg sync.WaitGroup
@@ -16,11 +19,11 @@ func main() {
 	wg.Add(2)
 
 	// start smpp server
-	smsc := NewSmsc()
-	go smsc.Start(smscPort, wg)
+	service := smsc.NewSmsc()
+	go service.Start(smscPort, wg)
 
 	// start web server
-	webServer := NewWebServer(smsc)
+	webServer := smscserver.NewWebServer(service)
 	go webServer.Start(webPort, wg)
 
 	wg.Wait()

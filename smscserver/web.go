@@ -1,4 +1,4 @@
-package main
+package smscserver
 
 import (
 	"fmt"
@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"sync"
 	"text/template"
+
+	"github.com/ukarim/smscsim/smsc"
 )
 
 const WEB_PAGE_TPL = `
@@ -124,7 +126,7 @@ const WEB_PAGE_TPL = `
 `
 
 type WebServer struct {
-	Smsc Smsc
+	Smsc smsc.Smsc
 }
 
 type TplVars struct {
@@ -135,8 +137,8 @@ type TplVars struct {
 	Recipient    string
 }
 
-func NewWebServer(smsc Smsc) WebServer {
-	return WebServer{smsc}
+func NewWebServer(service smsc.Smsc) WebServer {
+	return WebServer{service}
 }
 
 func (webServer *WebServer) Start(port int, wg sync.WaitGroup) {
@@ -147,7 +149,7 @@ func (webServer *WebServer) Start(port int, wg sync.WaitGroup) {
 	log.Fatal(http.ListenAndServe(fmt.Sprint(":", port), nil))
 }
 
-func webHandler(smsc *Smsc) func(http.ResponseWriter, *http.Request) {
+func webHandler(smsc *smsc.Smsc) func(http.ResponseWriter, *http.Request) {
 	if smsc == nil {
 		log.Fatal("nil Smsc provided to web handler")
 	}
