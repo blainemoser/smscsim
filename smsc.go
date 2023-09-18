@@ -53,6 +53,10 @@ const (
 	TLV_MESSAGE_STATE    = 0x0427
 )
 
+var (
+	nullTerm = []byte("\x00")
+)
+
 type Session struct {
 	SystemId  string
 	Conn      net.Conn
@@ -135,6 +139,38 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) err
 	}
 }
 
+// According to the SMPP spec, cstrings demarcate
+// several sections of the PDU response will contain c-strings.
+// The purpose of this function is to index these c-strings by
+// their index positions within the body as a whole.
+// Note that the index positons here will be the PDU body
+// excluding the header; in other words, excluding he command
+// which should be parsed out before.
+func extractCStrings(data []byte) map[int]string {
+	cStrings := make(map[int]string)
+	var currentString []byte
+	var currentIndex int
+
+	for indexPosition, b := range data {
+		if b != 0 {
+			if len(currentString) < 1 {
+				currentIndex = indexPosition
+			}
+			currentString = append(currentString, b)
+		} else if len(currentString) > 0 {
+			cStrings[currentIndex] = string(currentString)
+			currentString = nil // Reset the current string
+		}
+	}
+
+	// If the last string is not null-terminated, add it
+	if len(currentString) > 0 {
+		cStrings[currentIndex] = string(currentString)
+	}
+
+	return cStrings
+}
+
 // how to convert ints to and from bytes https://golang.org/pkg/encoding/binary/
 
 func handleSmppConnection(smsc *Smsc, conn net.Conn) {
@@ -147,30 +183,44 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn) {
 	defer conn.Close()
 
 	for {
-		// read PDU header
-		pduHeadBuf := make([]byte, 16)
-		if _, err := io.ReadFull(conn, pduHeadBuf); err != nil {
+		command := make([]byte, 2048) // this is overkill, but it's safe; we'll truncate it. Since it's not a phone we can be a little liberal
+		if _, err := conn.Read(command); err != nil && err != io.EOF {
 			log.Printf("closing connection for system_id[%s] due %v\n", systemId, err)
 			return
 		}
+		command = bytes.TrimRight(command, "\x00")
+		pduHeadBuf := command[:16]
 		cmdLen := binary.BigEndian.Uint32(pduHeadBuf[0:])
 		cmdId := binary.BigEndian.Uint32(pduHeadBuf[4:])
-		// cmdSts := binary.BigEndian.Uint32(pduHeadBuf[8:])
+		cmdSts := binary.BigEndian.Uint32(pduHeadBuf[8:])
 		seqNum := binary.BigEndian.Uint32(pduHeadBuf[12:])
+		fmt.Println("len", cmdLen, "id", cmdId, "status", cmdSts, "sqnum", seqNum)
+
+		var rmain []byte
+		if len(command) >= 16 {
+			rmain = command[16:]
+		} else {
+			rmain = command
+		}
+		fmt.Println("remaining")
+		for position, char := range rmain {
+			fmt.Println(position, char)
+		}
 
 		var respBytes []byte
 
 		switch cmdId {
 		case BIND_RECEIVER, BIND_TRANSMITTER, BIND_TRANSCEIVER: // bind requests
 			{
-				pduBody := make([]byte, cmdLen-16)
-				if _, err := io.ReadFull(conn, pduBody); err != nil {
-					log.Printf("closing connection due %v\n", err)
-					return
-				}
+				pduBody := command[cmdLen-16:]
+				// pduBody := make([]byte, cmdLen-16)
+				// if _, err := io.ReadFull(conn, pduBody); err != nil {
+				// 	log.Printf("closing connection due %v\n", err)
+				// 	return/
+				// }
 
 				// find first null terminator
-				idx := bytes.Index(pduBody, []byte("\x00"))
+				idx := bytes.Index(pduBody, nullTerm)
 				if idx == -1 {
 					log.Printf("invalid pdu_body. cannot find system_id. closing connection")
 					return
@@ -205,72 +255,100 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn) {
 			}
 		case SUBMIT_SM: // submit_sm
 			{
-				pduBody := make([]byte, cmdLen-16)
-				if _, err := io.ReadFull(conn, pduBody); err != nil {
-					log.Printf("error reading submit_sm body for %s due %v. closing connection", systemId, err)
-					return
-				}
-				log.Printf("submit_sm from system_id[%s]\n", systemId)
-
+				// pduBody := make([]byte, cmdLen-16)
+				// if _, err := io.ReadFull(conn, pduBody); err != nil {
+				// 	log.Printf("error reading submit_sm body for %s due %v. closing connection", systemId, err)
+				// 	return
+				// }
 				if receiver {
 					respBytes = headerPDU(SUBMIT_SM_RESP, STS_INV_BIND_STS, seqNum)
 					log.Printf("error handling submit_sm from system_id[%s]. session with bind type RECEIVER cannot send requests", systemId)
 					break
 				}
 
+				var sourceAddress string
+				var destinationAddress string
+				var srvType string
+				var scheduleEnd string
+				var validityEnd string
+				var ok bool
+
+				// https://smpp.org/
+				pduBody := rmain
+				cstrings := extractCStrings(pduBody)
 				idxCounter := 0
-				nullTerm := []byte("\x00")
 
-				srvTypeEndIdx := bytes.Index(pduBody, nullTerm)
-				if srvTypeEndIdx == -1 {
+				// service_type Var.
+				// Max 6
+				// C-Octet
+				// String
+				// Indicates the type of service associated with the
+				// message.
+				// Where not required this should be set to a single
+				// NULL byte.
+				if srvType, ok = cstrings[idxCounter]; !ok {
+					if bytes.Index(pduBody[idxCounter:], nullTerm) == -1 {
+						respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
+						break
+					}
+				}
+				idxCounter += len(srvType) + 1 // NOW AT Source TON we're not using the service type for now, but it should be in the c-strings if needed
+				idxCounter += 2                // NOW AT Source Address; skip npi. if needed, these should be at the following 2 positions after the last service character
+
+				// srcAddrEndIdx := bytes.Index(pduBody[idxCounter:], nullTerm)
+				if sourceAddress, ok = cstrings[idxCounter]; !ok {
 					respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
 					break
 				}
-				idxCounter = idxCounter + srvTypeEndIdx
-				idxCounter = idxCounter + 3 // skip src ton and npi
+				idxCounter += len(sourceAddress) + 1 // move up one index position after source address; NOW AT Destination TON
+				idxCounter = idxCounter + 2          // skip dest ton and npi. if needed, they will be at the two positions after the last source address character
 
-				srcAddrEndIdx := bytes.Index(pduBody[idxCounter:], nullTerm)
-				if srcAddrEndIdx == -1 {
+				// destAddrEndIdx := bytes.Index(pduBody[idxCounter:], nullTerm)
+				if destinationAddress, ok = cstrings[idxCounter]; !ok {
 					respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
 					break
 				}
-				idxCounter = idxCounter + srcAddrEndIdx
-				idxCounter = idxCounter + 3 // skip dest ton and npi
+				idxCounter += len(destinationAddress) + 1 // move up one index after the destination address
+				idxCounter = idxCounter + 3               // skip esm_class, protocol_id, priority_flag
 
-				destAddrEndIdx := bytes.Index(pduBody[idxCounter:], nullTerm)
-				if destAddrEndIdx == -1 {
-					respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
-					break
+				if scheduleEnd, ok = cstrings[idxCounter]; !ok {
+					if bytes.Index(pduBody[idxCounter:], nullTerm) == -1 {
+						respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
+						break
+					}
 				}
-				idxCounter = idxCounter + destAddrEndIdx
-				idxCounter = idxCounter + 4 // skip esm_class, protocol_id, priority_flag
+				idxCounter += len(scheduleEnd) + 1 // one char after the schedule end c-string; next is validity period
 
-				schedEndIdx := bytes.Index(pduBody[idxCounter:], nullTerm)
-				if schedEndIdx == -1 {
-					respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
-					break
+				if validityEnd, ok = cstrings[idxCounter]; !ok {
+					if bytes.Index(pduBody[idxCounter:], nullTerm) == -1 {
+						respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
+						break
+					}
 				}
-				idxCounter = idxCounter + schedEndIdx
-				idxCounter = idxCounter + 1 // next is validity period
+				idxCounter += len(validityEnd) + 1   // counter should now be on the register DLR flag
+				registeredDlr := pduBody[idxCounter] // registered_delivery is next field after the validity_period
 
-				validityEndIdx := bytes.Index(pduBody[idxCounter:], nullTerm)
-				if validityEndIdx == -1 {
-					respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
-					break
+				// we're not too interested in the fields between the "register DLR" flag and the actual text of the message.
+				// Therefore, if we have the space, we'll check for text from the remaining cstring (it would be the last
+				// possible one) and use that
+				var textMessage string
+				if len(pduBody) >= idxCounter+4 {
+					idxCounter += 4 // This should take us to the total chars in the text
+					numberOfChars := pduBody[idxCounter]
+					if numberOfChars > 0 {
+						textMessage = string(pduBody[idxCounter+1 : idxCounter+1+int(numberOfChars)])
+					}
 				}
-				idxCounter = idxCounter + validityEndIdx
-				registeredDlr := pduBody[idxCounter+1] // registered_delivery is next field after the validity_period
 
 				// prepare submit_sm_resp
 				msgId := strconv.Itoa(rand.Int())
 
 				respBytes = stringBodyPDU(SUBMIT_SM_RESP, STS_OK, seqNum, msgId)
-
 				if registeredDlr != 0 {
 					go func() {
 						time.Sleep(2000 * time.Millisecond)
 						now := time.Now()
-						dlr := deliveryReceiptPDU(msgId, now, now)
+						dlr := deliveryReceiptPDU(sourceAddress, destinationAddress, textMessage, msgId, now, now)
 						if _, err := conn.Write(dlr); err != nil {
 							log.Printf("error sending delivery receipt to system_id[%s] due %v.", systemId, err)
 							return
@@ -282,24 +360,25 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn) {
 			}
 		case DELIVER_SM_RESP: // deliver_sm_resp
 			{
-				if cmdLen > 16 {
-					buf := make([]byte, cmdLen-16)
-					if _, err := io.ReadFull(conn, buf); err != nil {
-						log.Printf("error reading deliver_sm_resp for %s due %v. closing connection", systemId, err)
-						return
-					}
-				}
+				// if cmdLen > 16 {
+				// 	buf := command[cmdLen-16:]
+				// 	buf := make([]byte, cmdLen-16)
+				// 	if _, err := io.ReadFull(conn, buf); err != nil {
+				// 		log.Printf("error reading deliver_sm_resp for %s due %v. closing connection", systemId, err)
+				// 		return
+				// 	}
+				// }
 				log.Println("deliver_sm_resp from", systemId)
 			}
 		default:
 			{
-				if cmdLen > 16 {
-					buf := make([]byte, cmdLen-16)
-					if _, err := io.ReadFull(conn, buf); err != nil {
-						log.Printf("error reading pdu for %s due %v. closing connection", systemId, err)
-						return
-					}
-				}
+				// if cmdLen > 16 {
+				// 	buf := make([]byte, cmdLen-16)
+				// 	if _, err := io.ReadFull(conn, buf); err != nil {
+				// 		log.Printf("error reading pdu for %s due %v. closing connection", systemId, err)
+				// 		return
+				// 	}
+				// }
 				log.Printf("unsupported pdu cmd_id(%d) from %s", cmdId, systemId)
 				// generic nack packet with status "Invalid Command ID"
 				respBytes = headerPDU(GENERIC_NACK, STS_INVALID_CMD, seqNum)
@@ -334,12 +413,12 @@ func stringBodyPDU(cmdId, cmdSts, seqNum uint32, body string) []byte {
 	return buf
 }
 
-const DELIVERY_RECEIPT_FORMAT = "id:%s sub:001 dlvrd:001 submit date:%s done date:%s stat:DELIVRD err:000 Text:..."
+const DELIVERY_RECEIPT_FORMAT = "id:%s sub:001 dlvrd:001 submit date:%s done date:%s stat:DELIVRD err:000 Text:%s"
 
-func deliveryReceiptPDU(msgId string, submitDate, doneDate time.Time) []byte {
+func deliveryReceiptPDU(src, dst, textMessage, msgId string, submitDate, doneDate time.Time) []byte {
 	sbtDateFrmt := submitDate.Format("0601021504")
 	doneDateFrmt := doneDate.Format("0601021504")
-	deliveryReceipt := fmt.Sprintf(DELIVERY_RECEIPT_FORMAT, msgId, sbtDateFrmt, doneDateFrmt)
+	deliveryReceipt := fmt.Sprintf(DELIVERY_RECEIPT_FORMAT, msgId, sbtDateFrmt, doneDateFrmt, textMessage)
 	var tlvs []Tlv
 
 	// receipted_msg_id TLV
@@ -353,7 +432,7 @@ func deliveryReceiptPDU(msgId string, submitDate, doneDate time.Time) []byte {
 	msgStateTlv := Tlv{TLV_MESSAGE_STATE, 1, []byte{2}} // 2 - delivered
 	tlvs = append(tlvs, msgStateTlv)
 
-	return deliverSmPDU("", "", []byte(deliveryReceipt), CODING_DEFAULT, rand.Int(), tlvs)
+	return deliverSmPDU(src, dst, []byte(deliveryReceipt), CODING_DEFAULT, rand.Int(), tlvs)
 }
 
 func deliverSmPDU(sender, recipient string, shortMessage []byte, coding byte, seqNum int, tlvs []Tlv) []byte {
