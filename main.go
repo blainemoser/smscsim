@@ -1,32 +1,46 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
-	"sync"
+	"syscall"
 
 	"github.com/ukarim/smscsim/smsc"
 	"github.com/ukarim/smscsim/smscserver"
 )
 
-var wg sync.WaitGroup
-
 func main() {
 	smscPort := getPort("SMSC_PORT", 2775)
 	webPort := getPort("WEB_PORT", 12775)
 
-	wg.Add(2)
-
 	// start smpp server
 	service := smsc.NewSmsc()
-	go service.Start(smscPort, wg)
+	messageChan := make(smsc.MessageChan)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go service.Start(smscPort, messageChan)
 
 	// start web server
 	webServer := smscserver.NewWebServer(service)
-	go webServer.Start(webPort, wg)
+	go webServer.Start(webPort)
 
-	wg.Wait()
+	go func() {
+	forloop:
+		for {
+			select {
+			case sig := <-sigChan:
+				fmt.Printf("Received signal: %v\n", sig)
+				break forloop
+			case message := <-messageChan:
+				fmt.Println("received message", message.MessageReceived(), message.MessageId(), message.Command(), message.Response(), message.Command())
+			}
+		}
+	}()
+	<-sigChan
 }
 
 func getPort(envVar string, defVal int) int {

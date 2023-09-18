@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"sync"
 	"text/template"
 
 	"github.com/ukarim/smscsim/smsc"
@@ -141,9 +140,7 @@ func NewWebServer(service smsc.Smsc) WebServer {
 	return WebServer{service}
 }
 
-func (webServer *WebServer) Start(port int, wg sync.WaitGroup) {
-	defer wg.Done()
-
+func (webServer *WebServer) Start(port int) {
 	http.HandleFunc("/", webHandler(&webServer.Smsc))
 	log.Println("Starting web server on port", port)
 	log.Fatal(http.ListenAndServe(fmt.Sprint(":", port), nil))

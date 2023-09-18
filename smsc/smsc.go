@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
-	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -53,6 +52,13 @@ const (
 	TLV_MESSAGE_STATE    = 0x0427
 )
 
+// types
+
+const (
+	MOBILE_ORIGINATED = "mobile_originated"
+	DLR               = "delivery_report"
+)
+
 var (
 	nullTerm = []byte("\x00")
 )
@@ -69,6 +75,68 @@ type Tlv struct {
 	Value []byte
 }
 
+type Message interface {
+	SourceAddr() string
+	DestinationAddr() string
+	Command() uint32
+	MessageReceived() string
+	// SentOrReceived() bool // true for sent, false for received
+	MessageId() string
+	Response() []byte
+	Type() string
+}
+
+type PDUMessage struct {
+	MsgSourceAddr      string
+	MsgDestinationAddr string
+	MsgCommand         uint32
+	MsgResponse        []byte
+	MsgID              string
+	Message            string
+}
+
+type DeliveryRepoort struct {
+	PDUMessage
+}
+
+type MO struct {
+	PDUMessage
+}
+
+func (msg PDUMessage) SourceAddr() string {
+	return msg.MsgSourceAddr
+}
+
+func (msg PDUMessage) DestinationAddr() string {
+	return msg.MsgDestinationAddr
+}
+
+func (msg PDUMessage) Command() uint32 {
+	return msg.MsgCommand
+}
+
+func (msg PDUMessage) MessageId() string {
+	return msg.MsgID
+}
+
+func (msg PDUMessage) MessageReceived() string {
+	return msg.Message
+}
+
+func (msg MO) Type() string {
+	return MOBILE_ORIGINATED
+}
+
+func (msg DeliveryRepoort) Type() string {
+	return DLR
+}
+
+func (msg PDUMessage) Response() []byte {
+	return msg.MsgResponse
+}
+
+type MessageChan chan Message
+
 type Smsc struct {
 	Sessions map[int]Session
 }
@@ -78,9 +146,7 @@ func NewSmsc() Smsc {
 	return Smsc{sessions}
 }
 
-func (smsc *Smsc) Start(port int, wg sync.WaitGroup) {
-	defer wg.Done()
-
+func (smsc *Smsc) Start(port int, message MessageChan) {
 	ln, err := net.Listen("tcp", fmt.Sprint(":", port))
 	if err != nil {
 		log.Panic(err)
@@ -93,7 +159,7 @@ func (smsc *Smsc) Start(port int, wg sync.WaitGroup) {
 		if err != nil {
 			log.Printf("error accepting new tcp connection %v", err)
 		} else {
-			go handleSmppConnection(smsc, conn)
+			go handleSmppConnection(smsc, conn, message)
 		}
 	}
 }
@@ -129,10 +195,15 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) err
 	// TODO implement UDH for large messages
 	shortMsg := truncateString(message, 70) // just truncate to 70 symbols
 	var tlvs []Tlv
-	moMessage := deliverSmPDU(sender, recipient, toUcs2Coding(shortMsg), CODING_UCS2, rand.Int(), tlvs)
-	if _, err := session.Conn.Write(moMessage); err != nil {
+	pdumsg := PDUMessage{
+		MsgSourceAddr:      sender,
+		MsgDestinationAddr: recipient,
+		MsgResponse:        toUcs2Coding(shortMsg),
+	}
+	moMessage := deliverSmPDU(pdumsg, CODING_UCS2, rand.Int(), tlvs)
+	if _, err := session.Conn.Write(moMessage.Response()); err != nil {
 		log.Printf("Cannot send MO message to systemId: [%s]. Network error [%v]", systemId, err)
-		return fmt.Errorf("Cannot send MO message. Network error")
+		return err
 	} else {
 		log.Printf("MO message to systemId: [%s] was successfully sent. Sender: [%s], recipient: [%s]", systemId, sender, recipient)
 		return nil
@@ -173,7 +244,7 @@ func extractCStrings(data []byte) map[int]string {
 
 // how to convert ints to and from bytes https://golang.org/pkg/encoding/binary/
 
-func handleSmppConnection(smsc *Smsc, conn net.Conn) {
+func handleSmppConnection(smsc *Smsc, conn net.Conn, message MessageChan) {
 	sessionId := rand.Int()
 	systemId := "anonymous"
 	bound := false
@@ -338,17 +409,29 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn) {
 
 				// prepare submit_sm_resp
 				msgId := strconv.Itoa(rand.Int())
-
 				respBytes = stringBodyPDU(SUBMIT_SM_RESP, STS_OK, seqNum, msgId)
+
+				pdu := PDUMessage{
+					MsgSourceAddr:      sourceAddress,
+					MsgDestinationAddr: destinationAddress,
+					MsgCommand:         cmdId,
+					MsgResponse:        respBytes,
+					MsgID:              msgId,
+					Message:            textMessage,
+				}
+
+				message <- MO{pdu}
+
 				if registeredDlr != 0 {
 					go func() {
 						time.Sleep(2000 * time.Millisecond)
 						now := time.Now()
-						dlr := deliveryReceiptPDU(sourceAddress, destinationAddress, textMessage, msgId, now, now)
-						if _, err := conn.Write(dlr); err != nil {
+						dlr := deliveryReceiptPDU(pdu, now, now)
+						if _, err := conn.Write(dlr.Response()); err != nil {
 							log.Printf("error sending delivery receipt to system_id[%s] due %v.", systemId, err)
 							return
 						} else {
+							message <- DeliveryRepoort{dlr}
 							log.Printf("delivery receipt for message [%s] was send to system_id[%s]", msgId, systemId)
 						}
 					}()
@@ -411,15 +494,15 @@ func stringBodyPDU(cmdId, cmdSts, seqNum uint32, body string) []byte {
 
 const DELIVERY_RECEIPT_FORMAT = "id:%s sub:001 dlvrd:001 submit date:%s done date:%s stat:DELIVRD err:000 Text:%s"
 
-func deliveryReceiptPDU(src, dst, textMessage, msgId string, submitDate, doneDate time.Time) []byte {
+func deliveryReceiptPDU(message PDUMessage, submitDate, doneDate time.Time) PDUMessage {
 	sbtDateFrmt := submitDate.Format("0601021504")
 	doneDateFrmt := doneDate.Format("0601021504")
-	deliveryReceipt := fmt.Sprintf(DELIVERY_RECEIPT_FORMAT, msgId, sbtDateFrmt, doneDateFrmt, textMessage)
+	deliveryReceipt := fmt.Sprintf(DELIVERY_RECEIPT_FORMAT, message.MessageId(), sbtDateFrmt, doneDateFrmt, message.MessageReceived())
 	var tlvs []Tlv
 
 	// receipted_msg_id TLV
 	var rcptMsgIdBuf bytes.Buffer
-	rcptMsgIdBuf.WriteString(msgId)
+	rcptMsgIdBuf.WriteString(message.MessageId())
 	rcptMsgIdBuf.WriteByte(0) // null terminator
 	receiptMsgId := Tlv{TLV_RECEIPTED_MSG_ID, rcptMsgIdBuf.Len(), rcptMsgIdBuf.Bytes()}
 	tlvs = append(tlvs, receiptMsgId)
@@ -428,10 +511,12 @@ func deliveryReceiptPDU(src, dst, textMessage, msgId string, submitDate, doneDat
 	msgStateTlv := Tlv{TLV_MESSAGE_STATE, 1, []byte{2}} // 2 - delivered
 	tlvs = append(tlvs, msgStateTlv)
 
-	return deliverSmPDU(src, dst, []byte(deliveryReceipt), CODING_DEFAULT, rand.Int(), tlvs)
+	message.MsgResponse = []byte(deliveryReceipt)
+
+	return deliverSmPDU(message, CODING_DEFAULT, rand.Int(), tlvs)
 }
 
-func deliverSmPDU(sender, recipient string, shortMessage []byte, coding byte, seqNum int, tlvs []Tlv) []byte {
+func deliverSmPDU(message PDUMessage, coding byte, seqNum int, tlvs []Tlv) PDUMessage {
 	// header without cmd_len
 	header := make([]byte, 12)
 	binary.BigEndian.PutUint32(header[0:], uint32(DELIVER_SM))
@@ -447,23 +532,24 @@ func deliverSmPDU(sender, recipient string, shortMessage []byte, coding byte, se
 
 	buf.WriteByte(0) // src ton
 	buf.WriteByte(0) // src npi
-	if sender == "" {
+	if message.SourceAddr() == "" {
 		buf.WriteByte(0)
 	} else {
-		buf.WriteString(sender)
+		buf.WriteString(message.SourceAddr())
 		buf.WriteByte(0)
 	}
 
 	buf.WriteByte(0) // dest ton
 	buf.WriteByte(0) // dest npi
-	if recipient == "" {
+	if message.DestinationAddr() == "" {
 		buf.WriteByte(0)
 	} else {
-		buf.WriteString(recipient)
+		buf.WriteString(message.DestinationAddr())
 		buf.WriteByte(0)
 	}
 
-	buf.WriteByte(0)      // esm class
+	buf.WriteString(string([]byte{4})) // esm class 4
+	// buf.WriteByte(0)      // esm class
 	buf.WriteByte(0)      // protocol id
 	buf.WriteByte(0)      // priority flag
 	buf.WriteByte(0)      // sched delivery time
@@ -473,9 +559,9 @@ func deliverSmPDU(sender, recipient string, shortMessage []byte, coding byte, se
 	buf.WriteByte(coding) // data coding
 	buf.WriteByte(0)      // def msg id
 
-	smLen := len(shortMessage)
+	smLen := len(message.Response())
 	buf.WriteByte(byte(smLen))
-	buf.Write(shortMessage)
+	buf.Write(message.Response())
 
 	for _, t := range tlvs {
 		tlvBytes := make([]byte, 4)
@@ -494,7 +580,9 @@ func deliverSmPDU(sender, recipient string, shortMessage []byte, coding byte, se
 	deliverSm.Write(cmdLenBytes)
 	deliverSm.Write(buf.Bytes())
 
-	return deliverSm.Bytes()
+	message.MsgResponse = deliverSm.Bytes()
+
+	return message
 }
 
 func truncateString(input string, maxLen int) string {
