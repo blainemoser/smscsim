@@ -192,19 +192,15 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn) {
 		pduHeadBuf := command[:16]
 		cmdLen := binary.BigEndian.Uint32(pduHeadBuf[0:])
 		cmdId := binary.BigEndian.Uint32(pduHeadBuf[4:])
-		cmdSts := binary.BigEndian.Uint32(pduHeadBuf[8:])
+		// cmdSts := binary.BigEndian.Uint32(pduHeadBuf[8:])
 		seqNum := binary.BigEndian.Uint32(pduHeadBuf[12:])
-		fmt.Println("len", cmdLen, "id", cmdId, "status", cmdSts, "sqnum", seqNum)
+		// fmt.Println("len", cmdLen, "id", cmdId, "status", cmdSts, "sqnum", seqNum)
 
 		var rmain []byte
 		if len(command) >= 16 {
 			rmain = command[16:]
 		} else {
 			rmain = command
-		}
-		fmt.Println("remaining")
-		for position, char := range rmain {
-			fmt.Println(position, char)
 		}
 
 		var respBytes []byte
