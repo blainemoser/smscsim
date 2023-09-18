@@ -461,6 +461,10 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn, message MessageChan) {
 				// 		return
 				// 	}
 				// }
+				pdumsg := PDUMessage{
+					Message: string(command),
+				}
+				message <- DeliveryRepoort{pdumsg}
 				log.Println("deliver_sm_resp from", systemId)
 			}
 		default:
