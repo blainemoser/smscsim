@@ -173,7 +173,7 @@ func (smsc *Smsc) BoundSystemIds() []string {
 	return systemIds
 }
 
-func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (string, error) {
+func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (MO, error) {
 	var session *Session = nil
 	for _, sess := range smsc.Sessions {
 		if systemId == sess.SystemId {
@@ -184,12 +184,12 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (st
 
 	if session == nil {
 		log.Printf("Cannot send MO message to systemId: [%s]. No bound session found", systemId)
-		return "", fmt.Errorf("No session found for systemId: [%s]", systemId)
+		return MO{}, fmt.Errorf("No session found for systemId: [%s]", systemId)
 	}
 
 	if !session.ReceiveMo {
 		log.Printf("Cannot send MO message to systemId: [%s]. Only RECEIVER and TRANSCEIVER sessions could receive MO messages", systemId)
-		return "", fmt.Errorf("Only RECEIVER and TRANSCEIVER sessions could receive MO messages")
+		return MO{}, fmt.Errorf("Only RECEIVER and TRANSCEIVER sessions could receive MO messages")
 	}
 
 	// TODO implement UDH for large messages
@@ -204,10 +204,10 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (st
 	data := deliverSmPDU(pdumsg, CODING_UCS2, rand.Int(), tlvs, false)
 	if _, err := session.Conn.Write(data); err != nil {
 		log.Printf("Cannot send MO message to systemId: [%s]. Network error [%v]", systemId, err)
-		return "", err
+		return MO{}, err
 	}
 	log.Printf("MO message to systemId: [%s] was successfully sent. Sender: [%s], recipient: [%s]", systemId, sender, recipient)
-	return pdumsg.MessageId(), nil
+	return MO{pdumsg}, nil
 }
 
 // According to the SMPP spec, cstrings demarcate
