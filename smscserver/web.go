@@ -163,12 +163,12 @@ func webHandler(smsc *smsc.Smsc) func(http.ResponseWriter, *http.Request) {
 				message := params.Get("message")
 				systemId := params.Get("system_id")
 				// send MO
-				err := smsc.SendMoMessage(sender, recipient, message, systemId)
+				id, err := smsc.SendMoMessage(sender, recipient, message, systemId)
 				q := url.Values{}
 				if err != nil {
 					q.Add("error", err.Error())
 				} else {
-					q.Add("message", "MO message was successfully sent")
+					q.Add("message", "MO with id ("+id+") message was successfully sent")
 				}
 				q.Add("sender", sender)
 				q.Add("recipient", recipient)

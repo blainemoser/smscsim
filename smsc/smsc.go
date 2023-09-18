@@ -173,7 +173,7 @@ func (smsc *Smsc) BoundSystemIds() []string {
 	return systemIds
 }
 
-func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) error {
+func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (string, error) {
 	var session *Session = nil
 	for _, sess := range smsc.Sessions {
 		if systemId == sess.SystemId {
@@ -184,12 +184,12 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) err
 
 	if session == nil {
 		log.Printf("Cannot send MO message to systemId: [%s]. No bound session found", systemId)
-		return fmt.Errorf("No session found for systemId: [%s]", systemId)
+		return "", fmt.Errorf("No session found for systemId: [%s]", systemId)
 	}
 
 	if !session.ReceiveMo {
 		log.Printf("Cannot send MO message to systemId: [%s]. Only RECEIVER and TRANSCEIVER sessions could receive MO messages", systemId)
-		return fmt.Errorf("Only RECEIVER and TRANSCEIVER sessions could receive MO messages")
+		return "", fmt.Errorf("Only RECEIVER and TRANSCEIVER sessions could receive MO messages")
 	}
 
 	// TODO implement UDH for large messages
@@ -198,16 +198,16 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) err
 	pdumsg := PDUMessage{
 		MsgSourceAddr:      sender,
 		MsgDestinationAddr: recipient,
-		MsgResponse:        toUcs2Coding(shortMsg),
+		MsgResponse:        []byte(shortMsg),
+		MsgID:              strconv.Itoa(rand.Int()),
 	}
-	moMessage := deliverSmPDU(pdumsg, CODING_UCS2, rand.Int(), tlvs)
-	if _, err := session.Conn.Write(moMessage.Response()); err != nil {
+	data := deliverSmPDU(pdumsg, CODING_UCS2, rand.Int(), tlvs, false)
+	if _, err := session.Conn.Write(data); err != nil {
 		log.Printf("Cannot send MO message to systemId: [%s]. Network error [%v]", systemId, err)
-		return err
-	} else {
-		log.Printf("MO message to systemId: [%s] was successfully sent. Sender: [%s], recipient: [%s]", systemId, sender, recipient)
-		return nil
+		return "", err
 	}
+	log.Printf("MO message to systemId: [%s] was successfully sent. Sender: [%s], recipient: [%s]", systemId, sender, recipient)
+	return pdumsg.MessageId(), nil
 }
 
 // According to the SMPP spec, cstrings demarcate
@@ -440,8 +440,8 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn, message MessageChan) {
 					go func() {
 						time.Sleep(2000 * time.Millisecond)
 						now := time.Now()
-						dlr := deliveryReceiptPDU(pdu, now, now)
-						if _, err := conn.Write(dlr.Response()); err != nil {
+						dlr, data := deliveryReceiptPDU(pdu, now, now)
+						if _, err := conn.Write(data); err != nil {
 							log.Printf("error sending delivery receipt to system_id[%s] due %v.", systemId, err)
 							return
 						} else {
@@ -508,7 +508,7 @@ func stringBodyPDU(cmdId, cmdSts, seqNum uint32, body string) []byte {
 
 const DELIVERY_RECEIPT_FORMAT = "id:%s sub:001 dlvrd:001 submit date:%s done date:%s stat:DELIVRD err:000 Text:%s"
 
-func deliveryReceiptPDU(message PDUMessage, submitDate, doneDate time.Time) PDUMessage {
+func deliveryReceiptPDU(message PDUMessage, submitDate, doneDate time.Time) (PDUMessage, []byte) {
 	sbtDateFrmt := submitDate.Format("0601021504")
 	doneDateFrmt := doneDate.Format("0601021504")
 	deliveryReceipt := fmt.Sprintf(DELIVERY_RECEIPT_FORMAT, message.MessageId(), sbtDateFrmt, doneDateFrmt, message.MessageReceived())
@@ -527,10 +527,11 @@ func deliveryReceiptPDU(message PDUMessage, submitDate, doneDate time.Time) PDUM
 
 	message.MsgResponse = []byte(deliveryReceipt)
 
-	return deliverSmPDU(message, CODING_DEFAULT, rand.Int(), tlvs)
+	data := deliverSmPDU(message, CODING_DEFAULT, rand.Int(), tlvs, true)
+	return message, data
 }
 
-func deliverSmPDU(message PDUMessage, coding byte, seqNum int, tlvs []Tlv) PDUMessage {
+func deliverSmPDU(message PDUMessage, coding byte, seqNum int, tlvs []Tlv, isDLR bool) []byte {
 	// header without cmd_len
 	header := make([]byte, 12)
 	binary.BigEndian.PutUint32(header[0:], uint32(DELIVER_SM))
@@ -561,9 +562,11 @@ func deliverSmPDU(message PDUMessage, coding byte, seqNum int, tlvs []Tlv) PDUMe
 		buf.WriteString(message.DestinationAddr())
 		buf.WriteByte(0)
 	}
-
-	buf.WriteString(string([]byte{4})) // esm class 4
-	// buf.WriteByte(0)      // esm class
+	if isDLR {
+		buf.WriteString(string([]byte{4})) // esm class 4
+	} else {
+		buf.WriteByte(0) // esm class
+	}
 	buf.WriteByte(0)      // protocol id
 	buf.WriteByte(0)      // priority flag
 	buf.WriteByte(0)      // sched delivery time
@@ -594,9 +597,7 @@ func deliverSmPDU(message PDUMessage, coding byte, seqNum int, tlvs []Tlv) PDUMe
 	deliverSm.Write(cmdLenBytes)
 	deliverSm.Write(buf.Bytes())
 
-	message.MsgResponse = deliverSm.Bytes()
-
-	return message
+	return deliverSm.Bytes()
 }
 
 func truncateString(input string, maxLen int) string {
