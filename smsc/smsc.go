@@ -261,7 +261,7 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn, message MessageChan) {
 		}
 		command = bytes.TrimRight(command, "\x00")
 		pduHeadBuf := command[:16]
-		cmdLen := binary.BigEndian.Uint32(pduHeadBuf[0:])
+		// cmdLen := binary.BigEndian.Uint32(pduHeadBuf[0:])
 		cmdId := binary.BigEndian.Uint32(pduHeadBuf[4:])
 		// cmdSts := binary.BigEndian.Uint32(pduHeadBuf[8:])
 		seqNum := binary.BigEndian.Uint32(pduHeadBuf[12:])
@@ -279,20 +279,34 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn, message MessageChan) {
 		switch cmdId {
 		case BIND_RECEIVER, BIND_TRANSMITTER, BIND_TRANSCEIVER: // bind requests
 			{
-				pduBody := command[cmdLen-16:]
 				// pduBody := make([]byte, cmdLen-16)
 				// if _, err := io.ReadFull(conn, pduBody); err != nil {
 				// 	log.Printf("closing connection due %v\n", err)
 				// 	return/
 				// }
 
-				// find first null terminator
-				idx := bytes.Index(pduBody, nullTerm)
-				if idx == -1 {
-					log.Printf("invalid pdu_body. cannot find system_id. closing connection")
+				if len(command) < 16 {
+					log.Printf("closing connection due %v\n", fmt.Errorf("command not found"))
 					return
 				}
-				systemId = string(pduBody[:idx])
+
+				cstrings := extractCStrings(command[16:]) // this is a hacky way to fix the bug
+
+				if len(cstrings) < 2 {
+					log.Printf("closing connection due %v\n", fmt.Errorf("command not found"))
+					return
+				}
+
+				for _, value := range cstrings {
+					// password would be the second one
+					systemId = value
+					break
+				}
+
+				if len(systemId) < 1 {
+					log.Printf("closing connection due %v\n", fmt.Errorf("system ID empty"))
+					return
+				}
 				log.Printf("bind request from system_id[%s]\n", systemId)
 
 				respCmdId := 2147483648 + cmdId // hack to calc resp cmd id
