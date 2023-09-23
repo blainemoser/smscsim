@@ -22,7 +22,8 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go service.Start(smscPort, messageChan)
+	logHandler := make(smsc.LogMessageChan)
+	go service.Start(smscPort, messageChan, logHandler)
 
 	// start web server
 	webServer := smscserver.NewWebServer(service)
@@ -36,7 +37,9 @@ func main() {
 				fmt.Printf("Received signal: %v\n", sig)
 				break forloop
 			case message := <-messageChan:
-				fmt.Println("received message", message.MessageReceived(), message.MessageId(), message.Command(), message.Response(), message.Command())
+				fmt.Println("received message", message.MessageReceived(), message.MessageId())
+			case logMessage := <-logHandler:
+				fmt.Printf("received log '%s': '%s'\n", logMessage.Level, logMessage.Message)
 			}
 		}
 	}()

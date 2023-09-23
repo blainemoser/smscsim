@@ -107,7 +107,7 @@ const WEB_PAGE_TPL = `
   </p>
   <p>
     <label for="short_message">Short message</label>
-    <textarea id="short_message" name="message" maxlength="70" placeholder="Short message..."></textarea>
+    <textarea id="short_message" name="message" placeholder="Short message..."></textarea>
   </p>
   <p>
     <input type="submit" value="Submit">
