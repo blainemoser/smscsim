@@ -27,14 +27,15 @@ func SendLongMessageParts(msg PDUMessage, session *Session) error {
 	for i := 0; i < countParts; i++ {
 		var tlvs []Tlv
 		UDHHeader[6] = uint8(i + 1) // current message part
+		dlrId := rand.Uint32()
 		var messsageText []byte
 		if i != countParts-1 {
 			messsageText = append(UDHHeader, text[i*int(maxCharLen):(i+1)*int(maxCharLen)]...)
 		} else {
 			messsageText = append(UDHHeader, text[i*int(maxCharLen):]...)
+			pendingDeliveries.insert(dlrId, msg)
 		}
 		msg.MsgResponse = messsageText
-		dlrId := rand.Uint32()
 		fmt.Println("sending long message part", dlrId)
 		data := deliverSmPDU(msg, CODING_UCS2, dlrId, tlvs, MULTIPART)
 		if _, err := session.Conn.Write(data); err != nil {

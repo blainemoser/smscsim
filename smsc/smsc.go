@@ -205,7 +205,6 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (MO
 		MsgResponse:        []byte(message),
 		MsgID:              strconv.Itoa(rand.Int()),
 	}
-	fmt.Println(message, len(message))
 	if len(pdumsg.MsgResponse) > int(maxCharLen) {
 		if err := SendLongMessageParts(pdumsg, session); err != nil {
 			return MO{}, err
@@ -213,6 +212,7 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (MO
 		return MO{pdumsg}, nil
 	}
 	dlrId := rand.Uint32()
+	pendingDeliveries.insert(dlrId, pdumsg)
 	data := deliverSmPDU(pdumsg, CODING_UCS2, dlrId, tlvs, "")
 	if _, err := session.Conn.Write(data); err != nil {
 		log.Printf("Cannot send MO message to systemId: [%s]. Network error [%v]", systemId, err)

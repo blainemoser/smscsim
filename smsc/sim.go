@@ -256,11 +256,14 @@ func (s *shortMessage) handle() ([]byte, error) {
 }
 
 func (d *deliveryResponse) handle() ([]byte, error) {
-	// dlrID := binary.BigEndian.Uint32(d.command.command[12:])
-	pdumsg := PDUMessage{
-		Message: string(d.command.command),
+	dlrID := binary.BigEndian.Uint32(d.command.command[12:])
+	// pdumsg := PDUMessage{
+	// }
+	pdumsg := pendingDeliveries.pop(dlrID)
+	if pdumsg != nil {
+		pdumsg.Message = string(d.command.command)
+		d.metaData.message <- DeliveryReport{*pdumsg}
 	}
-	d.metaData.message <- DeliveryReport{pdumsg}
 	d.metaData.Log <- LogMessage{Level: "info", Message: fmt.Sprintf("deliver_sm_resp from '%s'", d.metaData.systemId)}
 	return nil, nil
 }

@@ -37,7 +37,7 @@ func main() {
 				fmt.Printf("Received signal: %v\n", sig)
 				break forloop
 			case message := <-messageChan:
-				fmt.Println("received message", message.MessageReceived(), message.MessageId())
+				fmt.Println("received message", message.MessageReceived(), message.MessageId(), message.Type())
 			case logMessage := <-logHandler:
 				fmt.Printf("received log '%s': '%s'\n", logMessage.Level, logMessage.Message)
 			}
