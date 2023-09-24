@@ -212,7 +212,7 @@ func (s *shortMessage) handle() ([]byte, error) {
 	}
 
 	// prepare submit_sm_resp
-	msgId := strconv.Itoa(rand.Int())
+	msgId := strconv.Itoa(int(rand.Int31()))
 	respBytes = stringBodyPDU(SUBMIT_SM_RESP, STS_OK, s.sequenceNumber, msgId)
 	messageReady := true
 	if esmClass == 64 {

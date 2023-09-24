@@ -209,7 +209,7 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (MO
 		MsgSourceAddr:      sender,
 		MsgDestinationAddr: recipient,
 		MsgResponse:        []byte(message),
-		MsgID:              strconv.Itoa(rand.Int()),
+		MsgID:              strconv.Itoa(int(rand.Int31())),
 	}
 	if len(pdumsg.MsgResponse) > int(maxCharLen) {
 		if err := SendLongMessageParts(pdumsg, session); err != nil {
