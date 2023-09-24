@@ -2,6 +2,7 @@ package smsc
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -66,17 +67,20 @@ func (m *metaData) findSystemIdAndPassword(cstrings map[int]string) error {
 }
 
 func findUsernameAndPassword(cstrings map[int]string) (username, password string) {
-	count := 0
-	for _, value := range cstrings {
-		// password would be the second one
-		if count == 0 {
-			username = value
-		} else if count == 1 {
-			password = value
-		} else {
-			break
+	indeces := make([]int, 0)
+	for index := range cstrings {
+		indeces = append(indeces, index)
+	}
+	sort.Ints(indeces)
+	for i, index := range indeces {
+		if i == 0 {
+			username = cstrings[index]
+			continue
+		} else if i == 1 {
+			password = cstrings[index]
+			continue
 		}
-		count++
+		break
 	}
 	return
 }
