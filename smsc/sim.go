@@ -225,7 +225,6 @@ func (s *shortMessage) handle() ([]byte, error) {
 			multipartMessages.clear(part.id)
 		}
 	}
-	fmt.Println(messageReady)
 
 	pdu := PDUMessage{
 		MsgSourceAddr:      sourceAddress,

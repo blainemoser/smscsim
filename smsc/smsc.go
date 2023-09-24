@@ -264,6 +264,14 @@ const DELIVERY_RECEIPT_FORMAT = "id:%s sub:001 dlvrd:001 submit date:%s done dat
 
 func deliveryReceiptPDU(message PDUMessage, submitDate, doneDate time.Time) (PDUMessage, []byte) {
 	message.Message = ""
+
+	// Flip the source and dest numbers around; some platforms expect this.
+	source := message.MsgDestinationAddr
+	destination := message.MsgSourceAddr
+
+	message.MsgSourceAddr = source
+	message.MsgDestinationAddr = destination
+
 	sbtDateFrmt := submitDate.Format("0601021504")
 	doneDateFrmt := doneDate.Format("0601021504")
 	deliveryReceipt := fmt.Sprintf(DELIVERY_RECEIPT_FORMAT, message.MessageId(), sbtDateFrmt, doneDateFrmt)
