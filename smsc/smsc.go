@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -60,6 +61,7 @@ type (
 
 	// Main Smsc Object
 	Smsc struct {
+		mu       *sync.Mutex
 		Sessions map[int]Session
 	}
 
@@ -149,7 +151,7 @@ func (msg PDUMessage) Response() []byte {
 
 func NewSmsc() Smsc {
 	sessions := make(map[int]Session)
-	return Smsc{Sessions: sessions}
+	return Smsc{Sessions: sessions, mu: &sync.Mutex{}}
 }
 
 func (smsc *Smsc) Start(port int, message MessageChan, logChan LogMessageChan) error {
@@ -171,6 +173,8 @@ func (smsc *Smsc) Start(port int, message MessageChan, logChan LogMessageChan) e
 }
 
 func (smsc *Smsc) BoundSystemIds() []string {
+	smsc.mu.Lock()
+	defer smsc.mu.Unlock()
 	var systemIds []string
 	for _, sess := range smsc.Sessions {
 		systemId := sess.SystemId
@@ -180,6 +184,8 @@ func (smsc *Smsc) BoundSystemIds() []string {
 }
 
 func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (MO, error) {
+	smsc.mu.Lock()
+	defer smsc.mu.Unlock()
 	var session *Session = nil
 	for _, sess := range smsc.Sessions {
 		if systemId == sess.SystemId {
@@ -229,8 +235,11 @@ func handleSmppConnection(smsc *Smsc, conn net.Conn, message MessageChan, logHan
 	multipartMessages = newMultiparts()
 	pendingDeliveries = NewDeliveries()
 	meta := NewMetaData(smsc, message, logHandler)
-
-	defer delete(smsc.Sessions, meta.sessionId)
+	defer func() {
+		smsc.mu.Lock()
+		defer smsc.mu.Unlock()
+		delete(smsc.Sessions, meta.sessionId)
+	}()
 	defer conn.Close()
 
 	for {

@@ -103,6 +103,8 @@ func (b *bind) handle() ([]byte, error) {
 		respBytes = headerPDU(respCmdId, STS_ALREADY_BOUND, b.sequenceNumber)
 		b.metaData.Log <- LogMessage{Level: "info", Message: fmt.Sprintf("[%s] already has bound session", b.metaData.systemId)}
 	} else {
+		b.metaData.smsc.mu.Lock()
+		defer b.metaData.smsc.mu.Unlock()
 		receiveMo := b.commandId == BIND_RECEIVER || b.commandId == BIND_TRANSCEIVER
 		b.metaData.smsc.Sessions[b.metaData.sessionId] = Session{b.metaData.systemId, b.connection, receiveMo}
 		respBytes = stringBodyPDU(respCmdId, STS_OK, b.sequenceNumber, "smscsim")
