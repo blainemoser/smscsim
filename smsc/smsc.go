@@ -219,7 +219,7 @@ func (smsc *Smsc) SendMoMessage(sender, recipient, message, systemId string) (MO
 	}
 	dlrId := rand.Uint32()
 	pendingDeliveries.insert(dlrId, pdumsg)
-	data := deliverSmPDU(pdumsg, CODING_UCS2, dlrId, tlvs, "")
+	data := deliverSmPDU(pdumsg, CODING_DEFAULT, dlrId, tlvs, "")
 	if _, err := session.Conn.Write(data); err != nil {
 		log.Printf("Cannot send MO message to systemId: [%s]. Network error [%v]", systemId, err)
 		return MO{}, err

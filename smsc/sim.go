@@ -257,6 +257,11 @@ func (s *shortMessage) handle() ([]byte, error) {
 }
 
 func (d *deliveryResponse) handle() ([]byte, error) {
+
+	if len(d.command.command) < 16 {
+		return nil, fmt.Errorf("expected at least 16 bytes in command, got %d", len(d.command.command))
+	}
+
 	dlrID := binary.BigEndian.Uint32(d.command.command[12:])
 	// pdumsg := PDUMessage{
 	// }

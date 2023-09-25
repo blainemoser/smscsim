@@ -37,7 +37,7 @@ func SendLongMessageParts(msg PDUMessage, session *Session) error {
 		}
 		msg.MsgResponse = messageText
 		fmt.Println("sending long message part", dlrId, string(messageText))
-		data := deliverSmPDU(msg, CODING_UCS2, dlrId, tlvs, MULTIPART)
+		data := deliverSmPDU(msg, CODING_DEFAULT, dlrId, tlvs, MULTIPART)
 		if _, err := session.Conn.Write(data); err != nil {
 			return err
 		}
