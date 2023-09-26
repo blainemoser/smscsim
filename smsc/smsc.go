@@ -61,8 +61,9 @@ type (
 
 	// Main Smsc Object
 	Smsc struct {
-		mu       *sync.Mutex
-		Sessions map[int]Session
+		mu        *sync.Mutex
+		Sessions  map[int]Session
+		BlockDLRs bool // this is because I need to stress test software where DLRs fail to get sent; it's most likely not going to be useful
 	}
 
 	//
@@ -151,7 +152,7 @@ func (msg PDUMessage) Response() []byte {
 
 func NewSmsc() Smsc {
 	sessions := make(map[int]Session)
-	return Smsc{Sessions: sessions, mu: &sync.Mutex{}}
+	return Smsc{Sessions: sessions, mu: &sync.Mutex{}, BlockDLRs: false}
 }
 
 func (smsc *Smsc) Start(port int, message MessageChan, logChan LogMessageChan) error {

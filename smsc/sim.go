@@ -239,7 +239,7 @@ func (s *shortMessage) handle() ([]byte, error) {
 		s.metaData.message <- MO{pdu}
 	}
 
-	if registeredDlr != 0 {
+	if registeredDlr != 0 && !s.metaData.smsc.BlockDLRs {
 		go func() {
 			time.Sleep(2000 * time.Millisecond)
 			now := time.Now()
