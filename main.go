@@ -23,8 +23,7 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	logHandler := make(smsc.LogMessageChan)
-	stopChan := make(chan struct{})
-	go service.Start(smscPort, stopChan, messageChan, logHandler)
+	go service.Start(smscPort, messageChan, logHandler)
 
 	// start web server
 	webServer := smscserver.NewWebServer(service)

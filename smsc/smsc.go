@@ -155,35 +155,22 @@ func NewSmsc() Smsc {
 	return Smsc{Sessions: sessions, mu: &sync.Mutex{}, BlockDLRs: false}
 }
 
-func (smsc *Smsc) Start(port int, stopChan chan struct{}, message MessageChan, logChan LogMessageChan) error {
+func (smsc *Smsc) Start(port int, message MessageChan, logChan LogMessageChan) error {
 	ln, err := net.Listen("tcp", fmt.Sprint(":", port))
 	if err != nil {
 		return err
 	}
+	defer ln.Close()
 
 	logChan <- LogMessage{Level: "info", Message: fmt.Sprintf("SMSC simulator listening on port %d", port)}
-	var conn net.Conn
-	defer func() {
-		ln.Close()
-		if conn != nil {
-			conn.Close()
-		}
-	}()
-running:
 	for {
-		select {
-		case <-stopChan:
-			break running
-		default:
-			conn, err = ln.Accept()
-			if err != nil {
-				logChan <- LogMessage{Level: "error", Message: fmt.Sprintf("error accepting new tcp connection %v", err)}
-			} else {
-				go handleSmppConnection(smsc, conn, message, logChan)
-			}
+		conn, err := ln.Accept()
+		if err != nil {
+			logChan <- LogMessage{Level: "error", Message: fmt.Sprintf("error accepting new tcp connection %v", err)}
+		} else {
+			go handleSmppConnection(smsc, conn, message, logChan)
 		}
 	}
-	return nil
 }
 
 func (smsc *Smsc) BoundSystemIds() []string {
