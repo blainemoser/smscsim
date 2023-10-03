@@ -164,6 +164,7 @@ func (smsc *Smsc) Start(port int, stopChan chan struct{}, message MessageChan, l
 	logChan <- LogMessage{Level: "info", Message: fmt.Sprintf("SMSC simulator listening on port %d", port)}
 	var conn net.Conn
 	defer func() {
+		logChan <- LogMessage{Level: "info", Message: "Closing connection"}
 		ln.Close()
 		if conn != nil {
 			conn.Close()
@@ -173,6 +174,7 @@ running:
 	for {
 		select {
 		case <-stopChan:
+			logChan <- LogMessage{Level: "info", Message: "received signal to stop SMSC Server"}
 			break running
 		default:
 			conn, err = ln.Accept()
