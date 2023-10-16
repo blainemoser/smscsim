@@ -14,7 +14,7 @@ import (
 
 func main() {
 	smscPort := getPort("SMSC_PORT", 2775)
-	webPort := getPort("WEB_PORT", 12775)
+	webPort := getPort("WEB_PORT", 12776)
 
 	// start smpp server
 	service := smsc.NewSmsc()
@@ -23,7 +23,8 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	logHandler := make(smsc.LogMessageChan)
-	go service.Start(smscPort, messageChan, logHandler)
+	interruptChan := make(chan struct{})
+	go service.Start(smscPort, interruptChan, messageChan, logHandler)
 
 	// start web server
 	webServer := smscserver.NewWebServer(service)
@@ -40,6 +41,10 @@ func main() {
 				fmt.Println("received message", message.MessageReceived(), message.MessageId(), message.Type())
 			case logMessage := <-logHandler:
 				fmt.Printf("received log '%s': '%s'\n", logMessage.Level, logMessage.Message)
+				if logMessage.Fatal {
+					sigChan <- os.Kill
+					break forloop
+				}
 			}
 		}
 	}()

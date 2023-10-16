@@ -78,9 +78,15 @@ type (
 	LogMessage struct {
 		Level   string
 		Message string
+		Fatal   bool
 	}
 
 	LogMessageChan chan LogMessage
+
+	conAccepted struct {
+		conn net.Conn
+		err  error
+	}
 
 	Tlv struct {
 		Tag   int
@@ -155,20 +161,31 @@ func NewSmsc() Smsc {
 	return Smsc{Sessions: sessions, mu: &sync.Mutex{}, BlockDLRs: false}
 }
 
-func (smsc *Smsc) Start(port int, message MessageChan, logChan LogMessageChan) error {
+func (smsc *Smsc) Start(port int, interrupt chan struct{}, message MessageChan, logChan LogMessageChan) {
 	ln, err := net.Listen("tcp", fmt.Sprint(":", port))
 	if err != nil {
-		return err
+		logChan <- LogMessage{"error", fmt.Sprintf("error while connecting to SMSC service: %s", err.Error()), true}
+		return
 	}
 	defer ln.Close()
 
 	logChan <- LogMessage{Level: "info", Message: fmt.Sprintf("SMSC simulator listening on port %d", port)}
 	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			logChan <- LogMessage{Level: "error", Message: fmt.Sprintf("error accepting new tcp connection %v", err)}
-		} else {
-			go handleSmppConnection(smsc, conn, message, logChan)
+		connection := make(chan conAccepted, 1)
+		go func() {
+			conn, err := ln.Accept()
+			connection <- conAccepted{conn, err}
+		}()
+		select {
+		case <-interrupt:
+			logChan <- LogMessage{"info", "received interrupt signal", false}
+			return
+		case conn := <-connection:
+			if conn.err != nil {
+				logChan <- LogMessage{Level: "error", Message: fmt.Sprintf("error accepting new tcp connection %v", err)}
+				return
+			}
+			go handleSmppConnection(smsc, conn.conn, message, logChan)
 		}
 	}
 }
