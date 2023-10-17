@@ -181,6 +181,12 @@ func (smsc *Smsc) Start(port int, interrupt chan struct{}, message MessageChan, 
 			logChan <- LogMessage{"info", "received interrupt signal", false}
 			return
 		case conn := <-connection:
+			defer func() {
+				if conn.conn == nil {
+					return
+				}
+				conn.conn.Close()
+			}()
 			if conn.err != nil {
 				logChan <- LogMessage{Level: "error", Message: fmt.Sprintf("error accepting new tcp connection %v", err)}
 				return
